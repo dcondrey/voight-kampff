@@ -7,4 +7,5 @@ dependencies = [
     "scikit-learn",
     "lightgbm",
     "tqdm",
+    "tira>=0.0.200",
 ]
