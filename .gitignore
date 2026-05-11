@@ -3,3 +3,4 @@ data/
 cache/
 submissions/
 __pycache__/
+uv.lock
