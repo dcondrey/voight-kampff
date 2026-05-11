@@ -62,7 +62,7 @@ def main():
             text = r.get("text", "")
             feats = np.array([extract_features(text)], dtype=np.float32)
             prob = float(np.mean([m.predict(feats)[0] for m in models]))
-            prediction = {"id": r["id"], "label": round(1.0 - prob, 4)}
+            prediction = {"id": r["id"], "label": round(prob, 4)}
             out.write(json.dumps(prediction) + "\n")
 
     log.info("Wrote %d predictions to %s", len(records), output_path)
