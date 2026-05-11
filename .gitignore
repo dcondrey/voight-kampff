@@ -1,0 +1,5 @@
+data/
+.venv/
+cache/
+submissions/
+__pycache__/

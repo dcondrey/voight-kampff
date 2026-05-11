@@ -1,0 +1,49 @@
+{
+  "threshold": 0.4950000000000003,
+  "seeds": [
+    42,
+    123,
+    456,
+    789,
+    1024
+  ],
+  "n_features": 30,
+  "feature_names": [
+    "word_count_log",
+    "char_count_log",
+    "sent_count_log",
+    "vocab_richness",
+    "avg_word_length",
+    "digit_ratio",
+    "punct_ratio",
+    "compression_ratio",
+    "char_entropy",
+    "repetition_ratio",
+    "avg_sentence_length",
+    "sentence_length_cv",
+    "paragraph_count",
+    "words_per_paragraph",
+    "newline_ratio",
+    "hapax_ratio",
+    "yules_k",
+    "heaps_exponent",
+    "function_word_ratio",
+    "sentence_compression_cv",
+    "transition_diversity",
+    "connective_formality",
+    "first_person_ratio",
+    "we_ratio",
+    "whitespace_pattern",
+    "quote_density",
+    "expressive_punct_ratio",
+    "max_word_length",
+    "paren_density",
+    "raw_word_count"
+  ],
+  "cv_metrics": {
+    "auc": 0.9948359053615349,
+    "brier_complement": 0.9771443038903059,
+    "f1_macro": 0.9693733440836028,
+    "accuracy": 0.9710633989960771
+  }
+}
