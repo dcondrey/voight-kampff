@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 app = modal.App("voight-kampff-deberta")
 
 image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch",
         "transformers==4.46.3",
