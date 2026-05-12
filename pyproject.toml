@@ -10,4 +10,5 @@ dependencies = [
     "tira>=0.0.200",
     "joblib>=1.5.3",
     "scipy>=1.15.3",
+    "modal>=1.4.2",
 ]
