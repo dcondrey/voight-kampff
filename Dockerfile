@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir numpy lightgbm tqdm
+RUN pip install --no-cache-dir numpy lightgbm scikit-learn onnxruntime transformers tqdm
 
 COPY features.py .
 COPY main.py .

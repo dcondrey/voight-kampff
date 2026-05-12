@@ -16,6 +16,8 @@ import numpy as np
 from tqdm import tqdm
 
 
+COORD_CONJUNCTIONS = frozenset({"and", "but", "so", "or", "yet", "for", "nor"})
+
 FUNCTION_WORDS = frozenset(
     "the a an is are was were be been being have has had do does did will would "
     "shall should can could may might must to of in for on at by with from as "
@@ -71,7 +73,7 @@ def _sentence_split(text):
 def extract_features(text):
     """Extract feature vector from a single text.
 
-    Returns a list of 30 floats.
+    Returns a list of 37 floats.
     """
     tokens = text.split()
     tokens_lower = text.lower().split()
@@ -195,6 +197,69 @@ def extract_features(text):
     # Parenthesis density
     paren_density = (text.count("(") + text.count(")")) / max(char_count, 1)
 
+    # Zipf coefficient
+    if len(freq) >= 10:
+        sorted_freqs = sorted(freq.values(), reverse=True)[:100]
+        log_ranks = np.log(np.arange(1, len(sorted_freqs) + 1))
+        log_freqs = np.log(np.array(sorted_freqs, dtype=np.float64))
+        zipf_coeff = float(np.polyfit(log_ranks, log_freqs, 1)[0])
+    else:
+        zipf_coeff = -1.0
+
+    # Burstiness
+    burst_vals = []
+    for word, cnt in freq.items():
+        if 3 <= cnt <= 20:
+            positions = [i for i, w in enumerate(tokens_lower) if w == word]
+            gaps = [positions[j + 1] - positions[j] for j in range(len(positions) - 1)]
+            if len(gaps) >= 2:
+                mean_g = sum(gaps) / len(gaps)
+                if mean_g > 0:
+                    var_g = sum((g - mean_g) ** 2 for g in gaps) / len(gaps)
+                    burst_vals.append(math.sqrt(var_g) / mean_g)
+    burstiness = sum(burst_vals) / len(burst_vals) if burst_vals else 0.0
+
+    # Sentence-start diversity
+    if sent_count >= 2:
+        first_words = [s.split()[0].lower() for s in sentences if s.split()]
+        sent_start_diversity = len(set(first_words)) / len(first_words)
+    else:
+        sent_start_diversity = 0.0
+
+    # Conjunction-start ratio
+    if sent_count >= 2:
+        conj_starts = sum(1 for s in sentences if s.split() and s.split()[0].lower() in COORD_CONJUNCTIONS)
+        conjunction_start_ratio = conj_starts / sent_count
+    else:
+        conjunction_start_ratio = 0.0
+
+    # Punctuation spacing CV
+    punct_positions = [i for i, c in enumerate(text) if c in ",.;:"]
+    if len(punct_positions) >= 3:
+        punct_gaps = [punct_positions[j + 1] - punct_positions[j] for j in range(len(punct_positions) - 1)]
+        mean_pg = sum(punct_gaps) / len(punct_gaps)
+        if mean_pg > 0:
+            var_pg = sum((g - mean_pg) ** 2 for g in punct_gaps) / len(punct_gaps)
+            punct_spacing_cv = math.sqrt(var_pg) / mean_pg
+        else:
+            punct_spacing_cv = 0.0
+    else:
+        punct_spacing_cv = 0.0
+
+    # Comma-to-period ratio
+    period_count = text.count(".")
+    comma_count = text.count(",")
+    comma_period_ratio = comma_count / max(period_count, 1)
+
+    # Average word frequency rank
+    if word_count >= 5:
+        rank_map = {}
+        for rank, (w, _) in enumerate(freq.most_common(), 1):
+            rank_map[w] = rank
+        avg_word_rank = sum(rank_map[w] for w in tokens_lower) / word_count
+    else:
+        avg_word_rank = 0.0
+
     return [
         word_count_log,             # 0
         char_count_log,             # 1
@@ -226,6 +291,13 @@ def extract_features(text):
         max_word_length,            # 27
         paren_density,              # 28
         max(word_count, 1),         # 29: raw word count (for length-aware splits)
+        zipf_coeff,                 # 30
+        burstiness,                 # 31
+        sent_start_diversity,       # 32
+        conjunction_start_ratio,    # 33
+        punct_spacing_cv,           # 34
+        comma_period_ratio,         # 35
+        avg_word_rank,              # 36
     ]
 
 
@@ -241,13 +313,16 @@ FEATURE_NAMES = [
     "first_person_ratio", "we_ratio", "whitespace_pattern",
     "quote_density", "expressive_punct_ratio",
     "max_word_length", "paren_density", "raw_word_count",
+    "zipf_coeff", "burstiness", "sent_start_diversity",
+    "conjunction_start_ratio", "punct_spacing_cv",
+    "comma_period_ratio", "avg_word_rank",
 ]
 
 
 def extract_features_batch(texts, show_progress=True):
     """Extract features for a list of texts.
 
-    Returns (N, 30) numpy array.
+    Returns (N, 37) numpy array.
     """
     iterator = tqdm(texts, desc="Extracting features") if show_progress else texts
     features = [extract_features(t) for t in iterator]
