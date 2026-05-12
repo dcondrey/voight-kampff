@@ -146,17 +146,16 @@ def main():
     blended = weights[0] * lgb_prob + weights[1] * svm_prob
 
     # DeBERTa (if available)
-    if m["deberta_session"] is not None:
+    has_deberta = m["deberta_session"] is not None
+    if has_deberta:
         log.info("Running DeBERTa inference...")
         deberta_prob = predict_deberta(
             texts, m["deberta_session"], m["deberta_tokenizer"]
         )
-        # When DeBERTa is present, use 3-way ensemble
-        # DeBERTa dominates; LGB+SVM provide robustness
         blended = 0.6 * deberta_prob + 0.4 * blended
 
-    # Calibrate
-    if m["calibrator"] is not None:
+    # Calibrate (only for LGB+SVM blend; skip when DeBERTa changes distribution)
+    if m["calibrator"] is not None and not has_deberta:
         blended = m["calibrator"].predict(blended)
 
     # Write predictions
