@@ -47,7 +47,7 @@ def load_all_models():
 
     deberta_session = None
     deberta_tokenizer = None
-    deberta_dir = MODEL_DIR / "deberta_quantized"
+    deberta_dir = MODEL_DIR / "deberta_onnx"
     if deberta_dir.exists():
         import onnxruntime as ort
         from transformers import AutoTokenizer
@@ -146,16 +146,16 @@ def main():
     blended = weights[0] * lgb_prob + weights[1] * svm_prob
 
     # DeBERTa (if available)
-    has_deberta = m["deberta_session"] is not None
-    if has_deberta:
+    if m["deberta_session"] is not None:
         log.info("Running DeBERTa inference...")
         deberta_prob = predict_deberta(
             texts, m["deberta_session"], m["deberta_tokenizer"]
         )
-        blended = 0.6 * deberta_prob + 0.4 * blended
+        w_deb = config.get("deberta_weight", 0.6)
+        blended = w_deb * deberta_prob + (1 - w_deb) * blended
 
-    # Calibrate (only for LGB+SVM blend; skip when DeBERTa changes distribution)
-    if m["calibrator"] is not None and not has_deberta:
+    # Calibrate
+    if m["calibrator"] is not None:
         blended = m["calibrator"].predict(blended)
 
     # Write predictions
