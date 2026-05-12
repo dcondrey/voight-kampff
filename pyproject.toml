@@ -11,4 +11,8 @@ dependencies = [
     "joblib>=1.5.3",
     "scipy>=1.15.3",
     "modal>=1.4.2",
+    "onnxruntime>=1.24.3",
+    "transformers==4.46.3",
+    "sentencepiece>=0.2.1",
+    "protobuf>=6.33.6",
 ]
