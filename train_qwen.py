@@ -78,7 +78,7 @@ def train_and_export(train_data: list[dict], val_data: list[dict]):
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_NAME,
         num_labels=2,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
     )
@@ -165,7 +165,7 @@ def train_and_export(train_data: list[dict], val_data: list[dict]):
         train_dataset=train_ds,
         eval_dataset=val_ds,
         compute_metrics=compute_metrics,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     log.info("Starting training...")
