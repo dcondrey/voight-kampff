@@ -4,3 +4,4 @@ cache/
 submissions/
 __pycache__/
 uv.lock
+models/deberta_quantized/
