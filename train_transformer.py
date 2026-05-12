@@ -21,12 +21,14 @@ image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch",
-        "transformers",
+        "transformers==4.46.3",
         "datasets",
         "accelerate",
         "optimum[onnxruntime]",
         "scikit-learn",
         "numpy",
+        "sentencepiece",
+        "protobuf",
     )
 )
 
