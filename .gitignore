@@ -6,3 +6,7 @@ __pycache__/
 uv.lock
 models/deberta_quantized/
 models/deberta_onnx/
+
+models/
+*.onnx
+*.safetensors

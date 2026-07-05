@@ -260,6 +260,128 @@ def extract_features(text):
     else:
         avg_word_rank = 0.0
 
+    # Readability: Flesch-Kincaid Grade Level
+    total_syllables = sum(_count_syllables(w) for w in tokens)
+    if word_count >= 1 and sent_count >= 1:
+        flesch_kincaid = (0.39 * (word_count / sent_count)
+                         + 11.8 * (total_syllables / word_count) - 15.59)
+    else:
+        flesch_kincaid = 0.0
+
+    # Readability: Coleman-Liau Index
+    if word_count >= 1:
+        letters = sum(c.isalpha() for c in text)
+        l_per_100 = letters / word_count * 100
+        s_per_100 = sent_count / word_count * 100
+        coleman_liau = 0.0588 * l_per_100 - 0.296 * s_per_100 - 15.8
+    else:
+        coleman_liau = 0.0
+
+    # MATTR: Moving Average Type-Token Ratio (window=50)
+    mattr_window = 50
+    if word_count >= mattr_window:
+        ttrs = []
+        for start in range(word_count - mattr_window + 1):
+            window = tokens_lower[start:start + mattr_window]
+            ttrs.append(len(set(window)) / mattr_window)
+        mattr = sum(ttrs) / len(ttrs)
+    else:
+        mattr = vocab_richness
+
+    # Contraction ratio ("don't", "it's", "we're", etc.)
+    contraction_count = sum(1 for t in tokens if "'" in t and len(t) > 2)
+    contraction_ratio = contraction_count / max(word_count, 1)
+
+    # Sentence length range (max - min)
+    if len(sent_lengths) >= 2:
+        sent_length_range = max(sent_lengths) - min(sent_lengths)
+    else:
+        sent_length_range = 0
+
+    # Average syllables per word
+    avg_syllables = total_syllables / max(word_count, 1)
+
+    # Proportion of long words (>= 7 chars)
+    long_word_ratio = sum(1 for t in tokens if len(t) >= 7) / max(word_count, 1)
+
+    # Proportion of short sentences (<= 5 words)
+    short_sent_ratio = (sum(1 for sl in sent_lengths if sl <= 5)
+                        / max(len(sent_lengths), 1))
+
+    # Gini coefficient of word frequencies (AI text has more uniform distribution)
+    if len(freq) >= 10:
+        sorted_freqs = np.array(sorted(freq.values()), dtype=np.float64)
+        n_unique = len(sorted_freqs)
+        index = np.arange(1, n_unique + 1)
+        gini_word_freq = float(
+            (2 * np.sum(index * sorted_freqs)) / (n_unique * np.sum(sorted_freqs))
+            - (n_unique + 1) / n_unique
+        )
+    else:
+        gini_word_freq = 0.0
+
+    # Entropy ratio: unigram entropy / bigram entropy
+    # AI text has lower ratio (more predictable bigrams relative to unigrams)
+    if word_count >= 4:
+        bigrams = [tuple(tokens_lower[i:i + 2]) for i in range(word_count - 1)]
+        bigram_freq = Counter(bigrams)
+        bigram_total = len(bigrams)
+        bigram_entropy = -sum(
+            (c / bigram_total) * math.log2(c / bigram_total)
+            for c in bigram_freq.values()
+        )
+        unigram_total = word_count
+        unigram_entropy = -sum(
+            (c / unigram_total) * math.log2(c / unigram_total)
+            for c in freq.values()
+        )
+        entropy_ratio = unigram_entropy / max(bigram_entropy, 0.001)
+    else:
+        entropy_ratio = 1.0
+
+    # Readability variance: std of Flesch-Kincaid across 100-word windows
+    # Humans vary more in complexity across a text than AI
+    fk_window = 100
+    if word_count >= fk_window * 2:
+        fk_scores = []
+        for start in range(0, word_count - fk_window + 1, fk_window // 2):
+            win_tokens = tokens[start:start + fk_window]
+            win_text = " ".join(win_tokens)
+            win_sents = _sentence_split(win_text)
+            w_sc = max(len(win_sents), 1)
+            w_syl = sum(_count_syllables(w) for w in win_tokens)
+            fk = 0.39 * (len(win_tokens) / w_sc) + 11.8 * (w_syl / len(win_tokens)) - 15.59
+            fk_scores.append(fk)
+        readability_variance = float(np.std(fk_scores)) if len(fk_scores) >= 2 else 0.0
+    else:
+        readability_variance = 0.0
+
+    # Intrinsic dimensionality via MLE on sentence-level compression ratios
+    # Human text has higher variability (higher ID) than AI text
+    if len(long_sentences) >= 5:
+        sent_vecs = np.array([
+            [_compression_ratio(s), _entropy(s), len(s.split()) / max(len(s), 1)]
+            for s in long_sentences
+        ])
+        # MLE intrinsic dimensionality: use pairwise distances
+        from scipy.spatial.distance import pdist
+        dists = pdist(sent_vecs, metric="euclidean")
+        dists = dists[dists > 1e-10]
+        if len(dists) >= 5:
+            dists_sorted = np.sort(dists)
+            k = max(1, len(dists_sorted) // 4)
+            nn_dists = dists_sorted[:k]
+            max_d = nn_dists[-1]
+            if max_d > 1e-10:
+                log_ratios = np.log(nn_dists / max_d + 1e-10)
+                intrinsic_dim = -float(k / np.sum(log_ratios)) if np.sum(log_ratios) < 0 else 0.0
+            else:
+                intrinsic_dim = 0.0
+        else:
+            intrinsic_dim = 0.0
+    else:
+        intrinsic_dim = 0.0
+
     return [
         word_count_log,             # 0
         char_count_log,             # 1
@@ -290,7 +412,7 @@ def extract_features(text):
         expressive_punct_ratio,     # 26
         max_word_length,            # 27
         paren_density,              # 28
-        max(word_count, 1),         # 29: raw word count (for length-aware splits)
+        max(word_count, 1),         # 29: raw word count
         zipf_coeff,                 # 30
         burstiness,                 # 31
         sent_start_diversity,       # 32
@@ -298,7 +420,36 @@ def extract_features(text):
         punct_spacing_cv,           # 34
         comma_period_ratio,         # 35
         avg_word_rank,              # 36
+        flesch_kincaid,             # 37
+        coleman_liau,               # 38
+        mattr,                      # 39
+        contraction_ratio,          # 40
+        sent_length_range,          # 41
+        avg_syllables,              # 42
+        long_word_ratio,            # 43
+        short_sent_ratio,           # 44
+        intrinsic_dim,              # 45
+        gini_word_freq,             # 46
+        entropy_ratio,              # 47
+        readability_variance,       # 48
     ]
+
+
+def _count_syllables(word):
+    word = word.lower().strip(".,!?;:'\"")
+    if not word:
+        return 0
+    vowels = "aeiouy"
+    count = 0
+    prev_vowel = False
+    for ch in word:
+        is_vowel = ch in vowels
+        if is_vowel and not prev_vowel:
+            count += 1
+        prev_vowel = is_vowel
+    if word.endswith("e") and count > 1:
+        count -= 1
+    return max(count, 1)
 
 
 FEATURE_NAMES = [
@@ -316,13 +467,18 @@ FEATURE_NAMES = [
     "zipf_coeff", "burstiness", "sent_start_diversity",
     "conjunction_start_ratio", "punct_spacing_cv",
     "comma_period_ratio", "avg_word_rank",
+    "flesch_kincaid", "coleman_liau", "mattr",
+    "contraction_ratio", "sent_length_range",
+    "avg_syllables", "long_word_ratio", "short_sent_ratio",
+    "intrinsic_dim",
+    "gini_word_freq", "entropy_ratio", "readability_variance",
 ]
 
 
 def extract_features_batch(texts, show_progress=True):
     """Extract features for a list of texts.
 
-    Returns (N, 37) numpy array.
+    Returns (N, 49) numpy array.
     """
     iterator = tqdm(texts, desc="Extracting features") if show_progress else texts
     features = [extract_features(t) for t in iterator]

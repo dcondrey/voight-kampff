@@ -15,4 +15,8 @@ dependencies = [
     "transformers==4.46.3",
     "sentencepiece>=0.2.1",
     "protobuf>=6.33.6",
+    "torch>=2.12.0",
+    "onnx>=1.21.0",
+    "sentence-transformers>=5.5.0",
+    "onnxscript>=0.7.0",
 ]

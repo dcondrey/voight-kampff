@@ -45,6 +45,10 @@ def load_all_models():
     if config.get("has_calibrator"):
         calibrator = joblib.load(MODEL_DIR / "calibrator.pkl")
 
+    stacker = None
+    if config.get("has_stacker"):
+        stacker = joblib.load(MODEL_DIR / "stacker.pkl")
+
     deberta_session = None
     deberta_tokenizer = None
     deberta_dir = MODEL_DIR / "deberta_onnx"
@@ -73,10 +77,55 @@ def load_all_models():
         "svm_word_vec": svm_word_vec,
         "svm": svm,
         "calibrator": calibrator,
+        "stacker": stacker,
         "deberta_session": deberta_session,
         "deberta_tokenizer": deberta_tokenizer,
         "config": config,
     }
+
+
+def compute_gpt2_ppl(texts, max_tokens=512):
+    """Compute GPT-2 perplexity features for each text."""
+    import onnxruntime as ort
+    from transformers import AutoTokenizer
+    gpt2_path = MODEL_DIR / "gpt2-onnx" / "model.onnx"
+    if not gpt2_path.exists():
+        return None
+    gpt2_session = ort.InferenceSession(str(gpt2_path), providers=["CPUExecutionProvider"])
+    gpt2_tokenizer = AutoTokenizer.from_pretrained(str(MODEL_DIR / "gpt2-onnx"))
+    results = []
+    for text in texts:
+        tokens = gpt2_tokenizer(text, return_tensors="np", truncation=True, max_length=max_tokens)
+        input_ids = tokens["input_ids"]
+        attention_mask = tokens["attention_mask"]
+        position_ids = np.arange(input_ids.shape[1]).reshape(1, -1).astype(np.int64)
+        logits = gpt2_session.run(None, {
+            "input_ids": input_ids, "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        })[0]
+        ids = input_ids[0]
+        log_probs = []
+        cross_ents = []
+        rank1_hits = 0
+        for i in range(1, len(ids)):
+            logit = logits[0, i - 1]
+            shifted = logit - np.max(logit)
+            probs = np.exp(shifted) / np.exp(shifted).sum()
+            log_probs.append(np.log(probs[ids[i]] + 1e-10))
+            cross_ents.append(-np.log(probs.max() + 1e-10))
+            if np.argmax(logit) == ids[i]:
+                rank1_hits += 1
+        lp = np.array(log_probs)
+        n_tokens = max(len(ids) - 1, 1)
+        log_ppl = float(-np.mean(lp))
+        mean_cross_ent = float(np.mean(cross_ents))
+        results.append({
+            "log_ppl": log_ppl,
+            "burstiness": float(np.std(lp)),
+            "rank1_acc": float(rank1_hits / n_tokens),
+            "binoculars": log_ppl / (mean_cross_ent + 1e-10),
+        })
+    return results
 
 
 def predict_deberta(texts, session, tokenizer, max_length=512, batch_size=16):
@@ -94,6 +143,18 @@ def predict_deberta(texts, session, tokenizer, max_length=512, batch_size=16):
         probs = exp_logits / exp_logits.sum(axis=-1, keepdims=True)
         all_probs.append(probs[:, 1])
     return np.concatenate(all_probs)
+
+
+def build_meta_features(component_probs):
+    """Build enriched meta-features from component probabilities."""
+    raw = np.column_stack(component_probs)
+    interactions = np.column_stack([
+        np.max(raw, axis=1),
+        np.min(raw, axis=1),
+        np.std(raw, axis=1),
+        np.max(raw, axis=1) - np.min(raw, axis=1),
+    ])
+    return np.hstack([raw, interactions])
 
 
 def main():
@@ -142,21 +203,63 @@ def main():
     X_svm = sparse_hstack([svm_char, svm_word])
     svm_prob = m["svm"].predict_proba(X_svm)[:, 1]
 
-    # Blend LGB + SVM
-    blended = weights[0] * lgb_prob + weights[1] * svm_prob
-
-    # DeBERTa (if available)
+    # DeBERTa inference (if available)
+    deberta_prob = None
     if m["deberta_session"] is not None:
         log.info("Running DeBERTa inference...")
         deberta_prob = predict_deberta(
             texts, m["deberta_session"], m["deberta_tokenizer"]
         )
-        w_deb = config.get("deberta_weight", 0.6)
-        blended = w_deb * deberta_prob + (1 - w_deb) * blended
+
+    # Ensemble: stacker (preferred) or fallback to weighted average
+    if m["stacker"] is not None:
+        meta_cols = [lgb_prob, svm_prob]
+        if deberta_prob is not None and "deberta" in config.get("stacker_components", []):
+            meta_cols.append(deberta_prob)
+        X_meta = build_meta_features(meta_cols)
+        blended = m["stacker"].predict_proba(X_meta)[:, 1]
+        log.info("Using learned stacker (%s)", config.get("stacker_components"))
+    else:
+        blended = weights[0] * lgb_prob + weights[1] * svm_prob
+        if deberta_prob is not None:
+            w_deb = config.get("deberta_weight", 0.0)
+            if w_deb > 0:
+                blended = blended + w_deb * deberta_prob
 
     # Calibrate
     if m["calibrator"] is not None:
         blended = m["calibrator"].predict(blended)
+
+    # GPT-2 perplexity safety net: catches unseen generators the ensemble misses
+    ppl_features = compute_gpt2_ppl(texts)
+    if ppl_features is not None:
+        log_ppl = np.array([f["log_ppl"] for f in ppl_features])
+        bino = np.array([f["binoculars"] for f in ppl_features])
+        r1 = np.array([f["rank1_acc"] for f in ppl_features])
+
+        # Convert to AI probability via sigmoid (lower ppl/bino = more AI-like)
+        ppl_ai = 1.0 / (1.0 + np.exp(3.5 * (log_ppl - 3.1)))
+        bino_ai = 1.0 / (1.0 + np.exp(8.0 * (bino - 2.40)))
+        r1_ai = 1.0 / (1.0 + np.exp(-15.0 * (r1 - 0.38)))
+        ppl_signal = 0.4 * ppl_ai + 0.35 * bino_ai + 0.25 * r1_ai
+
+        # Only boost toward AI when ensemble is uncertain or says human
+        # This catches unseen generators without hurting confident correct predictions
+        boost = np.maximum(0, ppl_signal - blended) * 0.5
+        n_boosted = int((boost > 0.01).sum())
+        blended = np.clip(blended + boost, 0.0, 1.0)
+        log.info("PPL safety net: boosted %d/%d predictions (mean_ppl=%.2f, mean_bino=%.2f)",
+                 n_boosted, len(blended), log_ppl.mean(), bino.mean())
+
+    # Post-processing: abstain on uncertain predictions
+    abstention_margin = config.get("abstention_margin", 0.0)
+    if abstention_margin > 0:
+        uncertain = np.abs(blended - 0.5) < abstention_margin
+        n_abstained = int(uncertain.sum())
+        if n_abstained > 0:
+            log.info("Abstaining on %d/%d predictions (margin=%.3f)",
+                     n_abstained, len(blended), abstention_margin)
+            blended[uncertain] = 0.5
 
     # Write predictions
     log.info("Writing predictions...")
